@@ -1,0 +1,871 @@
+﻿<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2DFighters</title>
+  <style>
+    :root {
+      --bg: #020617;
+      --panel: #111827;
+      --text: #f8fafc;
+      --muted: #cbd5e1;
+      --accent: #f59e0b;
+      --accent-2: #38bdf8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Yu Gothic", "Meiryo", sans-serif;
+      background: linear-gradient(135deg, #020617, #111827 55%, #1e293b);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .app {
+      width: min(100%, 960px);
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 24px;
+      padding: 22px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    .header {
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 28px;
+    }
+
+    .subtitle {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      max-width: 900px;
+      height: auto;
+      border-radius: 16px;
+      background: #0f172a;
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="header">
+      <h1>2DFighters</h1>
+      <p class="subtitle">タイトル画面から始まり、ゲーム中・リザルト画面へ切り替わる流れを作っています。</p>
+    </div>
+    <canvas id="gameCanvas" width="900" height="520"></canvas>
+  </div>
+
+  <script>
+    // 1. 変数の定義
+    // キャンバスと描画コンテキストを取得します。
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // ゲームの状態を管理します。
+    const scenes = {
+      title: "title",
+      playing: "playing",
+      result: "result"
+    };
+
+    let scene = scenes.title;
+    let lastTime = 0;
+    let animationTime = 0;
+
+    // キーボード入力の状態を保持します。
+    const keys = {};
+
+    // 画面の見た目に関する定数です。
+    const groundY = 420;
+    const gravity = 1400;
+
+    // ゲーム中の時間制限です。
+    let roundTimeLeft = 30;
+    let introTimer = 0;
+    let introMessage = "開始！";
+    let resultTimer = 0;
+    let resultMessage = "";
+    let hitStopTimer = 0;
+
+    // プレイヤーと相手のキャラクター情報です。
+    // ここを変更すると見た目や性能を調整できます。
+    const player = {
+      x: 220,
+      y: groundY - 110,
+      width: 70,
+      height: 110,
+      hp: 100,
+      maxHp: 100,
+      speed: 260,
+      vx: 0,
+      vy: 0,
+      onGround: true,
+      jumpPower: 560,
+      attackCooldown: 0,
+      attackTimer: 0,
+      attackHit: false,
+      action: "idle",
+      hitFlash: 0,
+      invulnerable: 0,
+      facing: 1,
+      guardGauge: 100,
+      guardGaugeMax: 100,
+      guardActive: false,
+      guardTimer: 0,
+      counterTimer: 0,
+      guardSuccess: false,
+      guardRechargeRate: 24
+    };
+
+    const enemy = {
+      x: 620,
+      y: groundY - 110,
+      width: 70,
+      height: 110,
+      hp: 100,
+      maxHp: 100,
+      speed: 220,
+      vx: 0,
+      vy: 0,
+      onGround: true,
+      jumpPower: 540,
+      attackCooldown: 0,
+      attackTimer: 0,
+      attackHit: false,
+      action: "idle",
+      hitFlash: 0,
+      invulnerable: 0,
+      facing: -1,
+      guardGauge: 100,
+      guardGaugeMax: 100,
+      guardActive: false,
+      guardTimer: 0,
+      counterTimer: 0,
+      guardSuccess: false,
+      guardRechargeRate: 24
+    };
+
+    // 2. 初期化処理
+    // ページ読み込み後にイベントとループを開始します。
+    function init() {
+      window.addEventListener("keydown", handleKeyDown);
+      window.addEventListener("keyup", handleKeyUp);
+      canvas.addEventListener("click", handleCanvasClick);
+      requestAnimationFrame(gameLoop);
+    }
+
+    // 3. 更新処理
+    // requestAnimationFrame から呼ばれ、1フレームごとに状態を更新します。
+    function gameLoop(timestamp) {
+      if (!lastTime) {
+        lastTime = timestamp;
+      }
+      const deltaTime = (timestamp - lastTime) / 1000;
+      lastTime = timestamp;
+      animationTime += deltaTime;
+
+      update(deltaTime);
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function update(deltaTime) {
+      if (scene === scenes.playing) {
+        if (hitStopTimer > 0) {
+          hitStopTimer = Math.max(0, hitStopTimer - deltaTime);
+          if (hitStopTimer > 0) {
+            return;
+          }
+        }
+
+        if (introTimer > 0) {
+          introTimer = Math.max(0, introTimer - deltaTime);
+        }
+
+        if (roundTimeLeft > 0) {
+          roundTimeLeft = Math.max(0, roundTimeLeft - deltaTime);
+        }
+
+        updatePlayer(deltaTime);
+        updateEnemy(deltaTime);
+        updateResultIfNeeded();
+      }
+
+      if (scene === scenes.result) {
+        if (resultTimer > 0) {
+          resultTimer = Math.max(0, resultTimer - deltaTime);
+        }
+      }
+    }
+
+    function updatePlayer(deltaTime) {
+      // A/D で左右移動します。
+      player.vx = 0;
+      if (keys["KeyA"]) {
+        player.vx = -player.speed;
+        player.facing = -1;
+      }
+      if (keys["KeyD"]) {
+        player.vx = player.speed;
+        player.facing = 1;
+      }
+
+      // スペースでジャンプします。
+      if (keys["Space"] && player.onGround && !player.guardActive) {
+        player.vy = -player.jumpPower;
+        player.onGround = false;
+        player.action = "jump";
+      }
+
+      // P キーでパンチ、K キーでキックです。
+      if (keys["KeyP"] && player.attackCooldown <= 0 && player.onGround && !player.guardActive) {
+        startAttack(player, "punch");
+      }
+      if (keys["KeyK"] && player.attackCooldown <= 0 && player.onGround && !player.guardActive) {
+        startAttack(player, "kick");
+      }
+      if (keys["KeyO"] && player.guardGauge >= player.guardGaugeMax && !player.guardActive && !player.counterTimer && player.attackCooldown <= 0) {
+        attemptPlayerGuard();
+      }
+
+      if (player.guardActive) {
+        player.guardTimer = Math.max(0, player.guardTimer - deltaTime);
+        if (player.guardTimer === 0) {
+          player.guardActive = false;
+          if (player.action === "guard" || player.action === "counter") {
+            player.action = player.onGround ? "idle" : "jump";
+          }
+        }
+      }
+      if (player.counterTimer > 0) {
+        player.counterTimer = Math.max(0, player.counterTimer - deltaTime);
+        player.x += player.facing * 220 * deltaTime;
+        if (player.counterTimer === 0) {
+          player.action = player.onGround ? "idle" : "jump";
+        }
+      }
+      if (player.guardGauge < player.guardGaugeMax) {
+        player.guardGauge = Math.min(player.guardGaugeMax, player.guardGauge + deltaTime * player.guardRechargeRate);
+      }
+
+      const guardMoveMultiplier = player.guardActive ? 0.45 : 1;
+      player.vx = 0;
+      if (keys["KeyA"]) {
+        player.vx = -player.speed * guardMoveMultiplier;
+        player.facing = -1;
+      }
+      if (keys["KeyD"]) {
+        player.vx = player.speed * guardMoveMultiplier;
+        player.facing = 1;
+      }
+
+      // 物理演算で位置を更新します。
+      player.x += player.vx * deltaTime;
+      player.x = Math.max(60, Math.min(canvas.width - player.width - 60, player.x));
+      player.vy += gravity * deltaTime;
+      player.y += player.vy * deltaTime;
+
+      if (player.y + player.height >= groundY) {
+        player.y = groundY - player.height;
+        player.vy = 0;
+        player.onGround = true;
+        if (player.action === "jump") {
+          player.action = "idle";
+        }
+      }
+
+      if (player.attackTimer > 0) {
+        player.attackTimer = Math.max(0, player.attackTimer - deltaTime);
+        if (player.attackTimer === 0) {
+          player.action = "idle";
+          player.attackHit = false;
+        }
+      }
+      if (player.attackCooldown > 0) {
+        player.attackCooldown = Math.max(0, player.attackCooldown - deltaTime);
+      }
+      if (player.hitFlash > 0) {
+        player.hitFlash = Math.max(0, player.hitFlash - deltaTime);
+      }
+      if (player.invulnerable > 0) {
+        player.invulnerable = Math.max(0, player.invulnerable - deltaTime);
+      }
+
+      if (player.attackTimer > 0 && !player.attackHit) {
+        performAttack(player, enemy);
+        player.attackHit = true;
+      }
+
+      if (player.onGround && player.action !== "punch" && player.action !== "kick" && player.action !== "guard" && player.action !== "counter") {
+        player.action = player.vx !== 0 ? "run" : "idle";
+      }
+    }
+
+    function updateEnemy(deltaTime) {
+      // CPU の簡単なAIです。プレイヤーに近づき、たまにジャンプ・攻撃します。
+      const distanceToPlayer = player.x - enemy.x;
+      if (Math.abs(distanceToPlayer) > 70) {
+        enemy.vx = distanceToPlayer > 0 ? enemy.speed : -enemy.speed;
+        enemy.facing = distanceToPlayer > 0 ? 1 : -1;
+      } else {
+        enemy.vx = 0;
+      }
+
+      if (enemy.onGround && Math.random() < 0.004) {
+        enemy.vy = -enemy.jumpPower;
+        enemy.onGround = false;
+        enemy.action = "jump";
+      }
+
+      if (enemy.attackCooldown <= 0 && Math.abs(distanceToPlayer) < 120 && Math.random() < 0.017) {
+        const attackType = Math.random() < 0.5 ? "punch" : "kick";
+        startAttack(enemy, attackType);
+      }
+
+      if (enemy.attackCooldown <= 0 && enemy.onGround && Math.random() < 0.008 && enemy.guardGauge >= enemy.guardGaugeMax) {
+        attemptEnemyGuard();
+      }
+
+      enemy.x += enemy.vx * deltaTime;
+      enemy.x = Math.max(60, Math.min(canvas.width - enemy.width - 60, enemy.x));
+      enemy.vy += gravity * deltaTime;
+      enemy.y += enemy.vy * deltaTime;
+
+      if (enemy.y + enemy.height >= groundY) {
+        enemy.y = groundY - enemy.height;
+        enemy.vy = 0;
+        enemy.onGround = true;
+        if (enemy.action === "jump") {
+          enemy.action = "idle";
+        }
+      }
+
+      if (enemy.attackTimer > 0) {
+        enemy.attackTimer = Math.max(0, enemy.attackTimer - deltaTime);
+        if (enemy.attackTimer === 0) {
+          enemy.action = enemy.guardActive ? "guard" : "idle";
+          enemy.attackHit = false;
+        }
+      }
+      if (enemy.attackCooldown > 0) {
+        enemy.attackCooldown = Math.max(0, enemy.attackCooldown - deltaTime);
+      }
+      if (enemy.hitFlash > 0) {
+        enemy.hitFlash = Math.max(0, enemy.hitFlash - deltaTime);
+      }
+      if (enemy.invulnerable > 0) {
+        enemy.invulnerable = Math.max(0, enemy.invulnerable - deltaTime);
+      }
+      if (enemy.guardActive) {
+        enemy.guardTimer = Math.max(0, enemy.guardTimer - deltaTime);
+        if (enemy.guardTimer === 0) {
+          enemy.guardActive = false;
+          enemy.action = enemy.onGround ? "idle" : "jump";
+        }
+      }
+      if (enemy.guardGauge < enemy.guardGaugeMax) {
+        enemy.guardGauge = Math.min(enemy.guardGaugeMax, enemy.guardGauge + deltaTime * enemy.guardRechargeRate);
+      }
+
+      if (enemy.attackTimer > 0 && !enemy.attackHit) {
+        if (player.guardActive) {
+          player.guardActive = false;
+          player.guardTimer = 0;
+          player.action = player.onGround ? "idle" : "jump";
+          player.hitFlash = 0.12;
+          enemy.hitFlash = 0.12;
+          enemy.x += enemy.facing * 10;
+        } else if (player.guardSuccess) {
+          player.guardSuccess = false;
+          player.counterTimer = 0;
+          player.action = player.onGround ? "idle" : "jump";
+        } else {
+          performAttack(enemy, player);
+        }
+        enemy.attackHit = true;
+      }
+
+      if (enemy.onGround && enemy.action !== "punch" && enemy.action !== "kick") {
+        enemy.action = enemy.vx !== 0 ? "run" : "idle";
+      }
+    }
+
+    function startAttack(fighter, attackType) {
+      fighter.action = attackType;
+      fighter.attackTimer = attackType === "kick" ? 0.2 : 0.16;
+      fighter.attackCooldown = attackType === "kick" ? 0.55 : 0.45;
+      fighter.attackHit = false;
+    }
+
+    function attemptEnemyGuard() {
+      enemy.guardGauge = 0;
+      enemy.guardActive = true;
+      enemy.guardTimer = 1.0;
+      enemy.attackCooldown = 1.0;
+      enemy.action = "guard";
+    }
+
+    function attemptPlayerGuard() {
+      const canCounter = enemy.attackTimer > 0 && enemy.attackTimer <= 0.5 && (enemy.action === "punch" || enemy.action === "kick");
+      player.guardGauge = 0;
+      player.guardActive = true;
+      player.guardTimer = 1.0;
+      player.attackCooldown = 1.0;
+      player.action = "guard";
+      player.guardSuccess = false;
+
+      if (canCounter) {
+        player.guardSuccess = true;
+        player.counterTimer = 0.25;
+        player.action = "counter";
+        const counterDamage = enemy.action === "kick" ? 24 : 16;
+        enemy.hp = Math.max(0, enemy.hp - counterDamage);
+        enemy.hitFlash = 0.18;
+        enemy.x += player.facing * 24;
+        hitStopTimer = 0.08;
+      }
+    }
+
+    function performAttack(attacker, target) {
+      // 攻撃判定の範囲を計算して、相手にダメージを与えます。
+      const attackRange = attacker.action === "kick" ? 95 : 70;
+      const attackBox = {
+        left: attacker.x + (attacker.facing === 1 ? attacker.width : -attackRange),
+        top: attacker.y + 24,
+        width: attackRange,
+        height: 56
+      };
+      const targetBox = {
+        left: target.x,
+        top: target.y + 20,
+        width: target.width,
+        height: 70
+      };
+
+      if (rectsIntersect(attackBox, targetBox)) {
+        const damage = attacker.action === "kick" ? 12 : 8;
+        if (target.invulnerable <= 0) {
+          if (target.guardActive) {
+            target.guardActive = false;
+            target.guardTimer = 0;
+            target.action = target.onGround ? "idle" : "jump";
+          } else {
+            target.hp = Math.max(0, target.hp - damage);
+          }
+          target.hitFlash = 0.18;
+          target.invulnerable = 1.0;
+          target.x += attacker.facing * 18;
+        }
+      }
+    }
+
+    function rectsIntersect(a, b) {
+      return a.left < b.left + b.width &&
+        a.left + a.width > b.left &&
+        a.top < b.top + b.height &&
+        a.top + a.height > b.top;
+    }
+
+    function updateResultIfNeeded() {
+      // HP が 0 か、時間切れなら勝敗を決めます。
+      if (player.hp <= 0 || enemy.hp <= 0 || roundTimeLeft <= 0) {
+        finishRound();
+      }
+    }
+
+    function finishRound() {
+      if (scene !== scenes.playing) {
+        return;
+      }
+
+      scene = scenes.result;
+      resultTimer = 2.0;
+
+      if (player.hp > enemy.hp) {
+        resultMessage = "あなたの勝ち！";
+      } else if (player.hp < enemy.hp) {
+        resultMessage = "あなたの負け…";
+      } else {
+        resultMessage = "引き分け";
+      }
+    }
+
+    // 4. 描画処理
+    // Canvas にタイトル、ゲーム中、リザルト画面を描きます。
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawBackground();
+
+      if (scene === scenes.title) {
+        drawTitleScene();
+      } else if (scene === scenes.playing) {
+        drawPlayingScene();
+      } else if (scene === scenes.result) {
+        drawResultScene();
+      }
+    }
+
+function drawBackground() {
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, "#0f172a");
+      sky.addColorStop(0.55, "#1e3f2d");
+      sky.addColorStop(1, "#274f2d");
+      ctx.fillStyle = sky;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 朝日に近い光を描画します。
+      ctx.beginPath();
+      ctx.arc(760, 100, 120 + Math.sin(animationTime * 1.2) * 10, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(245, 158, 11, 0.18)";
+      ctx.fill();
+
+      // 遠景の山並み
+      ctx.fillStyle = "rgba(34, 64, 39, 0.9)";
+      ctx.beginPath();
+      ctx.moveTo(0, 320);
+      ctx.lineTo(110, 250);
+      ctx.lineTo(180, 290);
+      ctx.lineTo(260, 220);
+      ctx.lineTo(360, 280);
+      ctx.lineTo(480, 240);
+      ctx.lineTo(620, 300);
+      ctx.lineTo(760, 220);
+      ctx.lineTo(900, 280);
+      ctx.lineTo(900, 420);
+      ctx.lineTo(0, 420);
+      ctx.closePath();
+      ctx.fill();
+
+      // 森の木々のシルエット
+      ctx.fillStyle = "rgba(8, 24, 12, 0.95)";
+      for (let i = 0; i < 12; i++) {
+        const x = 60 + i * 70;
+        const baseY = 330 + (i % 3) * 18;
+        ctx.beginPath();
+        ctx.moveTo(x, baseY);
+        ctx.lineTo(x - 18, baseY + 44);
+        ctx.lineTo(x - 8, baseY + 44);
+        ctx.lineTo(x - 24, baseY + 74);
+        ctx.lineTo(x - 6, baseY + 74);
+        ctx.lineTo(x, baseY + 110);
+        ctx.lineTo(x + 6, baseY + 74);
+        ctx.lineTo(x + 24, baseY + 74);
+        ctx.lineTo(x + 8, baseY + 44);
+        ctx.lineTo(x + 18, baseY + 44);
+        ctx.closePath();
+        ctx.fill();
+      }
+
+      // 地面
+      ctx.fillStyle = "#4b7a3b";
+      ctx.fillRect(0, groundY, canvas.width, 120);
+      ctx.fillStyle = "#6b8f4a";
+      ctx.fillRect(0, groundY + 18, canvas.width, 102);
+
+      // 草と小道のライン
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, groundY);
+      ctx.lineTo(canvas.width, groundY);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, groundY + 28);
+      ctx.lineTo(canvas.width, groundY + 28);
+      ctx.stroke();
+    }
+
+    function drawTitleScene() {
+      drawCenteredText("2DFighters", canvas.width / 2, 120, 44, "#f8fafc");
+      drawCenteredText("開始！", canvas.width / 2, 190, 56, "#f59e0b");
+      drawCenteredText("クリックまたは Enter で開始", canvas.width / 2, 260, 24, "#cbd5e1");
+      drawCenteredText("A/D 移動 / Space ジャンプ", canvas.width / 2, 310, 20, "#cbd5e1");
+      drawCenteredText("P パンチ / K キック / O ガード", canvas.width / 2, 345, 20, "#cbd5e1");
+    }
+
+    function drawPlayingScene() {
+      drawHud();
+      drawFighter(player, true);
+      drawFighter(enemy, false);
+
+      // 開始演出として「開始！」を表示します。
+      if (introTimer > 0) {
+        drawCenteredText(introMessage, canvas.width / 2, 170, 58, "#fbbf24");
+      }
+    }
+
+    function drawResultScene() {
+      drawHud();
+      drawFighter(player, true);
+      drawFighter(enemy, false);
+
+      if (resultTimer > 0) {
+        drawCenteredText("そこまで！", canvas.width / 2, 170, 60, "#fbbf24");
+      } else {
+        const panelX = 220;
+        const panelY = 150;
+        const panelW = 460;
+        const panelH = 200;
+
+        ctx.fillStyle = "rgba(2, 6, 23, 0.9)";
+        ctx.fillRect(panelX, panelY, panelW, panelH);
+        ctx.strokeStyle = "rgba(255,255,255,0.2)";
+        ctx.strokeRect(panelX, panelY, panelW, panelH);
+
+        drawCenteredText("リザルト", canvas.width / 2, 210, 38, "#f8fafc");
+        drawCenteredText(resultMessage, canvas.width / 2, 270, 36, resultMessage === "あなたの勝ち！" ? "#f59e0b" : "#38bdf8");
+        drawCenteredText("クリックまたは Space でタイトルへ戻る", canvas.width / 2, 320, 20, "#cbd5e1");
+      }
+    }
+
+    function drawHud() {
+      // 左右の HP ゲージと中央のタイマーを描画します。
+      drawHpBar(40, 28, player, "YOU");
+      drawGuardBar(40, 64, player);
+      drawHpBar(canvas.width - 240, 28, enemy, "CPU");
+      drawGuardBar(canvas.width - 240, 64, enemy);
+
+      ctx.fillStyle = "rgba(2, 6, 23, 0.8)";
+      ctx.fillRect(canvas.width / 2 - 80, 24, 160, 46);
+      ctx.strokeStyle = "rgba(255,255,255,0.16)";
+      ctx.strokeRect(canvas.width / 2 - 80, 24, 160, 46);
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "bold 22px Yu Gothic, Meiryo, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(`TIME ${Math.max(0, Math.ceil(roundTimeLeft))}`, canvas.width / 2, 56);
+
+      // 操作方法を自分の HP バーの下に表示します。
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "16px Yu Gothic, Meiryo, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText("操作: A / D で移動", 58, 128);
+      ctx.fillText("Space でジャンプ", 58, 152);
+      ctx.fillText("P:パンチ / K:キック", 58, 176);
+      ctx.fillText("O:ガード (MAX で可)", 58, 200);
+    }
+
+    function drawGuardBar(x, y, fighter) {
+      const width = 180;
+      const height = 10;
+      const ratio = fighter.guardGauge / fighter.guardGaugeMax;
+
+      ctx.fillStyle = "rgba(255,255,255,0.14)";
+      ctx.fillRect(x, y, width, height);
+      ctx.fillStyle = ratio >= 1 ? "#fbbf24" : "#34d399";
+      ctx.fillRect(x, y, width * ratio, height);
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.strokeRect(x, y, width, height);
+    }
+
+    function drawHpBar(x, y, fighter, label) {
+      // HP ゲージの枠と内部を描画します。
+      const width = 180;
+      const height = 20;
+      const ratio = fighter.hp / fighter.maxHp;
+
+      ctx.fillStyle = "rgba(255,255,255,0.14)";
+      ctx.fillRect(x, y, width, height);
+      ctx.fillStyle = label === "YOU" ? "#f97316" : "#3b82f6";
+      ctx.fillRect(x, y, width * ratio, height);
+      ctx.strokeStyle = "rgba(255,255,255,0.2)";
+      ctx.strokeRect(x, y, width, height);
+
+      ctx.fillStyle = "#f8fafc";
+      ctx.font = "14px Yu Gothic, Meiryo, sans-serif";
+      ctx.textAlign = "left";
+      ctx.fillText(label, x, y - 8);
+      ctx.fillText(`${Math.max(0, fighter.hp)} / ${fighter.maxHp}`, x + 2, y + 34);
+    }
+
+    function drawFighter(fighter, isPlayer) {
+      // キャラクターの見た目を描画します。
+      // ここを変えるとキャラクターのデザインを簡単に差し替えられます。
+      ctx.save();
+      ctx.translate(fighter.x + fighter.width / 2, fighter.y + fighter.height / 2);
+      ctx.scale(fighter.facing, 1);
+      ctx.translate(-(fighter.width / 2), -(fighter.height / 2));
+
+      // ふちを出すための影
+      const shadowY = groundY - fighter.y + 6;
+      ctx.fillStyle = "rgba(0, 0, 0, 0.28)";
+      ctx.beginPath();
+      ctx.ellipse(fighter.width / 2, shadowY, 38, 10, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      const bodyColor = isPlayer ? "#f59e0b" : "#38bdf8";
+      const accentColor = isPlayer ? "#fb923c" : "#7dd3fc";
+      const attackProgress = fighter.attackTimer > 0
+        ? Math.min(1, 1 - fighter.attackTimer / (fighter.action === "kick" ? 0.2 : 0.16))
+        : 0;
+      const kickOffset = fighter.action === "kick" && fighter.attackTimer > 0 ? attackProgress * 18 : 0;
+
+      // 体
+      ctx.fillStyle = bodyColor;
+      ctx.fillRect(16, 24, 38, 56);
+      // 頭
+      ctx.fillStyle = "#fde68a";
+      ctx.beginPath();
+      ctx.arc(35, 18, 14, 0, Math.PI * 2);
+      ctx.fill();
+      // 腿
+      ctx.fillStyle = accentColor;
+      ctx.fillRect(20, 80, 10, 24);
+      ctx.fillRect(40 + kickOffset, 80, 10, 24);
+      // 腕
+      ctx.fillStyle = bodyColor;
+      ctx.fillRect(10, 34, 8, 24);
+      ctx.fillRect(54, 34, 8, 24);
+
+      // 攻撃中の見た目を変えます。
+      if (fighter.action === "punch" && fighter.attackTimer > 0) {
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.fillRect(60, 34, 18, 8);
+      } else if (fighter.action === "kick" && fighter.attackTimer > 0) {
+        // キック時の表示はなし。
+      }
+
+      if (fighter.guardActive || fighter.action === "guard") {
+        ctx.fillStyle = "rgba(248,250,252,0.95)";
+        ctx.fillRect(12, 32, 46, 8);
+        ctx.fillStyle = "#fbbf24";
+        ctx.beginPath();
+        ctx.moveTo(44, 20);
+        ctx.lineTo(54, 24);
+        ctx.lineTo(54, 34);
+        ctx.lineTo(44, 38);
+        ctx.lineTo(34, 34);
+        ctx.lineTo(34, 24);
+        ctx.closePath();
+        ctx.fill();
+      }
+      if (fighter.counterTimer > 0 || fighter.action === "counter") {
+        ctx.fillStyle = "rgba(250,204,21,0.95)";
+        ctx.fillRect(48, 30, 20, 8);
+      }
+
+      const shouldBlink = fighter.invulnerable > 0 && Math.floor(fighter.invulnerable * 10) % 2 === 0;
+      if (fighter.hitFlash > 0) {
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 3;
+        ctx.strokeRect(8, 12, 54, 92);
+      }
+      if (shouldBlink) {
+        ctx.globalAlpha = 0.35;
+      }
+
+      ctx.restore();
+    }
+
+    function drawCenteredText(text, x, y, size, color) {
+      ctx.save();
+      ctx.fillStyle = color;
+      ctx.font = `bold ${size}px Yu Gothic, Meiryo, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, x, y);
+      ctx.restore();
+    }
+
+    // キーボード入力の処理です。
+    function handleKeyDown(event) {
+      keys[event.code] = true;
+
+      if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) {
+        event.preventDefault();
+      }
+
+      if (scene === scenes.title && (event.code === "Enter" || event.code === "Space")) {
+        startGame();
+      }
+      if (scene === scenes.result && (event.code === "Enter" || event.code === "Space")) {
+        scene = scenes.title;
+      }
+    }
+
+    function handleKeyUp(event) {
+      keys[event.code] = false;
+    }
+
+    function handleCanvasClick() {
+      if (scene === scenes.title) {
+        startGame();
+      } else if (scene === scenes.result) {
+        scene = scenes.title;
+      }
+    }
+
+    function startGame() {
+      // ゲーム開始時に状態を初期化します。
+      scene = scenes.playing;
+      roundTimeLeft = 30;
+      introTimer = 1.0;
+      introMessage = "開始！";
+      resultMessage = "";
+
+      player.x = 220;
+      player.y = groundY - player.height;
+      player.hp = 100;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = true;
+      player.attackCooldown = 0;
+      player.attackTimer = 0;
+      player.attackHit = false;
+      player.action = "idle";
+      player.hitFlash = 0;
+      player.invulnerable = 0;
+      player.facing = 1;
+      player.guardGauge = 100;
+      player.guardActive = false;
+      player.guardTimer = 0;
+      player.counterTimer = 0;
+      player.guardSuccess = false;
+
+      enemy.x = 620;
+      enemy.y = groundY - enemy.height;
+      enemy.hp = 100;
+      enemy.vx = 0;
+      enemy.vy = 0;
+      enemy.onGround = true;
+      enemy.attackCooldown = 0;
+      enemy.attackTimer = 0;
+      enemy.attackHit = false;
+      enemy.action = "idle";
+      enemy.hitFlash = 0;
+      enemy.invulnerable = 0;
+      enemy.facing = -1;
+      enemy.guardGauge = 100;
+      enemy.guardActive = false;
+      enemy.guardTimer = 0;
+      enemy.counterTimer = 0;
+      enemy.guardSuccess = false;
+    }
+
+    init();
+  </script>
+</body>
+</html>
